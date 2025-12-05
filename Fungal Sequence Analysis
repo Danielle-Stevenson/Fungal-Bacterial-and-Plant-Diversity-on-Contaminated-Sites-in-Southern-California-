@@ -1,0 +1,131 @@
+#### Set WD & Load Libraries ####
+getwd() # use setwd("path/to/files") if you are not in the right directory
+
+suppressPackageStartupMessages({ # load packages quietly
+  library(phyloseq)
+  library(ggplot2)
+  library(vegan)
+  library(ggpubr)
+  #library(scales)
+  library(grid)
+  library(ape)
+  library(plyr)
+  library(dplyr)
+  library(viridis)
+  library(readxl)
+  library(metagenomeSeq)
+  library(DESeq2)
+  library(dplyr)
+  library(magrittr)
+  library(MASS)
+  library(dendextend)
+  library(tidyr)
+  library(reshape)
+  library(reshape2)
+  library(wesanderson)
+  library(nationalparkcolors)
+  library(shades)
+  library(ALDEx2)
+  library(rstatix)
+  library(devtools)
+  library(decontam)
+})
+
+#### Import and Prepare Data for Analyses ####
+
+## Import ALL env plate bacterial ASV count data
+f.ASV_counts<-data.frame(readRDS("ITS2_ASVs_Counts_dada2_Robject.rds", refhook = NULL))
+dim(f.ASV_counts)
+f.ASV_counts[1:4,1:4]
+
+# then prep ASV counts data frame for merging with taxa info later
+f.ASV_counts$ASV_ID<-rownames(f.ASV_counts)
+head(f.ASV_counts)
+colnames(f.ASV_counts)
+dim(f.ASV_counts)
+
+## Import ASV taxonomic data
+f.ASV_tax<-data.frame(readRDS("ITS2_ASVs_Taxonomy_dada2_Robject.rds", refhook = NULL))
+head(f.ASV_tax)
+
+# edit taxa names to exclude leading characteres
+f.ASV_tax<-as.data.frame(apply(f.ASV_tax,2, function(x) gsub("[^.]__", "", x))) # remove leading letters and __ with gsub
+
+f.ASV_tax[is.na(f.ASV_tax)]<- "Unknown" # turn all NAs into "Unkowns"
+f.ASV_tax$Species<-gsub("Unknown", "unknown", f.ASV_tax$Species) # change uppercase Unkonwn to lowercase unknown for unknown species classification
+head(f.ASV_tax)
+f.ASV_tax$ASV_ID<-rownames(f.ASV_tax) # create ASV ID column to use for merging data frames
+head(f.ASV_tax)
+
+#### Import metadata ####
+
+# Import all metadata
+metadata<-as.data.frame(read.csv("map.csv"), header=TRUE)
+head(metadata)
+
+#### Scale Environmental Metadata ####
+head(metadata)
+meta_scaled<-metadata
+meta_scaled[,7:17]<-scale(meta_scaled[,7:17],center=TRUE,scale=TRUE) # only scale chem env data
+head(meta_scaled)
+
+#### Create colors for variables of interest ####
+unique(meta_scaled$Site)
+unique(meta_scaled$Location)
+
+# Add colors for specific variables
+
+# color for site
+colorset1 = melt(c(B7071="blue",GATX="violet",B44="olivedrab",WD="green",TY="purple",SL="gold1",LA="firebrick1"))
+
+colorset1$Site<-rownames(colorset1)
+colnames(colorset1)[which(names(colorset1) == "value")] <- "Site_Color"
+colorset1
+
+meta_scaled<-merge(meta_scaled, colorset1, by="Site")
+head(meta_scaled)
+meta_scaled$Site_Color <- as.character(meta_scaled$Site_Color)
+
+rownames(meta_scaled)<-meta_scaled$SampleName
+
+# color for location
+colorset2 = melt(c(Interspace="goldenrod1",Rhizosphere="coral4"))
+
+colorset2$Location<-rownames(colorset2)
+colnames(colorset2)[which(names(colorset2) == "value")] <- "Loc_Color"
+colorset2
+
+meta_scaled<-merge(meta_scaled, colorset2, by="Location")
+head(meta_scaled)
+meta_scaled$Loc_Color <- as.character(meta_scaled$Loc_Color)
+
+rownames(meta_scaled)<-meta_scaled$SampleName
+
+### Merge All Data Together ####
+
+# first merge taxonomy and ASV counts
+fun.count.tax<-merge(f.ASV_counts, f.ASV_tax, by=c("ASV_ID"))
+head(fun.count.tax) # contains ASV counts per sample + ASV taxonomic ID info for each ASV
+
+# next, let's melt this count.tax data frame
+fun.ct.melt<-melt(fun.count.tax, by=c("ASV_ID","Kingdom","Phylum","Class","Order","Family","Genus","Species"))
+head(fun.ct.melt)
+colnames(fun.ct.melt)[which(names(fun.ct.melt) == "variable")] <- "NamesFeatTab"
+colnames(fun.ct.melt)[which(names(fun.ct.melt) == "value")] <- "Count"
+head(fun.ct.melt)
+
+# now we will merge melted count/taxa table with the SCALED metadata
+fun.dat.all<-merge(fun.ct.melt,meta_scaled)
+head(fun.dat.all)
+
+#### Create NEW ASV table with correct sample names ####
+
+# create ASV table (so sample IDs are rows, ASVs are columns -- this is for all vegan() package functions)
+fun.ASV_table <- as.data.frame(dcast(fun.dat.all, SampleName~ASV_ID, value.var="Count", fun.aggregate=sum)) ###
+fun.ASV_table[1:4,1:4]
+
+rownames(fun.ASV_table)<-fun.ASV_table$SampleName
+fun.ASV_table[1:4,1:4]
+
+### Export Global Env for Other Scripts ####
+save.image("Danielle_Fungal_Data_Ready.Rdata")
