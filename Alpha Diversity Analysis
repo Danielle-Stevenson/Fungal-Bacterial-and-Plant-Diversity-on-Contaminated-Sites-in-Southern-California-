@@ -1,0 +1,220 @@
+#### Set WD & Load Libraries ####
+getwd() # use setwd("path/to/files") if you are not in the right directory
+suppressPackageStartupMessages({ # load packages quietly
+  library(devtools)
+  library(phyloseq)
+  library(ggplot2)
+  library(vegan)
+  library(ggpubr)
+  library(lme4)
+  #library(scales)
+  library(grid)
+  library(ape)
+  library(plyr)
+  library(dplyr)
+  library(viridis)
+  library(ggbiplot)
+  library(readxl)
+  library(metagenomeSeq)
+  library(DESeq2)
+  library(dplyr)
+  library(magrittr)
+  library(MASS)
+  library(dendextend)
+  library(tidyr)
+  library(reshape)
+  library(reshape2)
+  library(wesanderson)
+  library(nationalparkcolors)
+  library(shades)
+  library(ALDEx2)
+  library(rstatix)
+  library(decontam)
+  library(ggvegan)
+  library(microbiome)
+  library(pairwiseAdonis)
+  library(corrplot)
+})
+
+#### Load Global Env to Import Count/ASV Tables ####
+load("Danielle_Fungal_Data_Ready.Rdata") # save global env to Rdata file
+
+fun.dat.all[1:6,1:6]
+fun.ASV_table[1:4,1:4]
+fun.ASV_table[(nrow(fun.ASV_table)-4):(nrow(fun.ASV_table)),(ncol(fun.ASV_table)-4):(ncol(fun.ASV_table))] # last 4 rows & cols
+head(meta_scaled)
+
+#### Rarefaction & Species Accumulation Curves ####
+
+# Species Accumulation Curve
+sc2<-specaccum(fun.ASV_table[,-1],"random")
+plot(sc2, ci.type="poly", col="darkgreen", lwd=2, ci.lty=0, ci.col="lightgreen")
+boxplot(sc2, col="yellow", add=TRUE, pch=20)
+
+# Prep for Rarefaction Curve
+rowSums(fun.ASV_table[,-1]) # total # ASVs per sample, excluding SampleName from calculation
+sort(colSums(fun.ASV_table[,-1]))
+
+# Create Rarefaction curve
+png('ITS2_rarecurve.png')
+rarecurve(as.matrix(fun.ASV_table[,-1]), col=meta_scaled$Site_Color,step=1000, label=F,ylab="ASVs")
+# to show sampel labels per curve, change label=T
+dev.off()
+
+#### Alpha Diversity & Species Richness ####
+
+## Calculate Shannon Diversity (abundance + richness considered in diversity calculation)
+# if you have another package loaded that has a diversity function, you can specify that you want to use vegan's diversity function as shown below
+Shan_ent.ITS2<-vegan::diversity(fun.ASV_table[,-1], index="shannon") # Shannon entropy
+Shan_div.ITS2<- exp(Shan_ent.ITS2) # Shannon Diversity aka Hill number 1
+
+# create data frame with Shannon entropy and Shannon diversity values
+div_ITS2<-data.frame(Fun_Shannon_Entropy=Shan_ent.ITS2,Fun_Shannon_Diversity=Shan_div.ITS2)
+class(div_ITS2)
+div_ITS2$SampleName<-rownames(div_ITS2)
+head(div_ITS2)
+
+# Calculate species richness (number of species per sample)
+specnumber(fun.ASV_table[,-1])
+
+# Create a DF with Species Richness
+S_ITS2<-data.frame(Fun_Species_Richness=specnumber(fun.ASV_table[,-1]), SampleName=rownames(fun.ASV_table)) # finds # of species per sample using RAW count data; if MARGIN = 2 it finds frequencies of species
+
+# merge richness and diversity dataframes together
+d.r_ITS2<-merge(div_ITS2, S_ITS2, by.x="SampleName", by.y="SampleName")
+
+# merge w/ metadata
+fun.div.metadat <- merge(d.r_ITS2,meta_scaled, by.x="SampleName", by.y="SampleName")
+head(fun.div.metadat)
+class(fun.div.metadat) # want data frame
+
+# save diversity data
+save.image("Danielle_Fungi_AlphaDiv_Data.Rdata")
+
+#### Using Shapiro-Wilk test for Normality ####
+shapiro.test(fun.div.metadat$Fun_Shannon_Diversity) # what is the p-value?
+# p-value = 0.0346
+# p > 0.05 states distribution of data are not significantly different from normal distribution
+# p < 0.05 means that data is significantly different from a normal distribution
+hist(fun.div.metadat$Fun_Shannon_Diversity, col="blue") # with outliars
+
+# visualize Q-Q plot for alpha div
+# The Q-Q plot, or quantile-quantile plot, is a graphical tool to help us assess if a set of data plausibly came from some theoretical distribution such as a normal or exponential.
+# For example, if we run a statistical analysis that assumes our residuals are normally distributed, we can use a normal Q-Q plot to check that assumption
+# more on Q-Q plots here: https://data.library.virginia.edu/understanding-q-q-plots/
+# more here too: https://grodri.github.io/glms/notes/c2s9#:~:text=8%20The%20Q%2DQ%20Plot,versus%20quantiles%20of%20a%20distribution.
+qqnorm(fun.div.metadat$Fun_Shannon_Diversity, pch = 1, frame = FALSE)
+qqline(fun.div.metadat$Fun_Shannon_Diversity, col = "red", lwd = 2)
+
+shapiro.test(fun.div.metadat$Fun_Species_Richness) # what is the p-value?
+# p-value = 0.6063
+# p > 0.05 states distribution of data are not significantly different from normal distribution
+# p < 0.05 means that data is significantly different from a normal distribution
+hist(fun.div.metadat$Fun_Species_Richness, col="blue")
+
+# visualize Q-Q plot for species richness
+qqnorm(fun.div.metadat$Fun_Species_Richness, pch = 1, frame = FALSE) # with outliars
+qqline(fun.div.metadat$Fun_Species_Richness, col = "red", lwd = 2)
+
+qqnorm(fun.div.metadat$Fun_Species_Richness, pch = 1, frame = FALSE) # without outliars
+qqline(fun.div.metadat$Fun_Species_Richness, col = "red", lwd = 2)
+
+#### Visualize Alpha Diversity & Species Richness ####
+## Shannon Diversity by Sample Month & Depth
+fun.a.div<-ggplot(fun.div.metadat, aes(x=Site, y=Fun_Shannon_Diversity)) +geom_jitter(aes(color=factor(Site)), size=4, width=0.15, height=0) +
+  scale_color_manual(name ="Site", values=unique(fun.div.metadat$Site_Color[order(fun.div.metadat$Site)])) +
+  geom_boxplot(fill=NA, outlier.color=NA)+theme_bw()+theme_classic()+
+  labs(title = "Fungal Shannon Diversity by Site", x="Site", y="Shannon Diversity", color="Site")+theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15))
+
+ggsave(fun.a.div,filename = "figures/AlphaDiversity/ITS2_alpha_diversity_site_boxplot.png", width=13, height=10, dpi=600)
+
+fun.a.div2<-ggplot(fun.div.metadat, aes(x=Location, y=Fun_Shannon_Diversity)) +geom_jitter(aes(color=factor(Location)), size=4, width=0.15, height=0) +
+  scale_color_manual(name ="Location", values=unique(fun.div.metadat$Loc_Color[order(fun.div.metadat$Location)])) +
+  geom_boxplot(fill=NA, outlier.color=NA)+theme_bw()+theme_classic()+
+  labs(title = "Fungal Shannon Diversity by Location", x="Location", y="Shannon Diversity", color="Location")+theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15))
+ggsave(fun.a.div2,filename = "figures/AlphaDiversity/ITS2_alpha_diversity_location_boxplot.png", width=13, height=10, dpi=600)
+
+## Species Richness by Sample Type
+fun.a.sr<-ggplot(fun.div.metadat, aes(x=Site, y=Fun_Species_Richness)) +geom_jitter(aes(color=factor(Site)), size=4, width=0.15, height=0) +
+  scale_color_manual(name ="Site", values=unique(fun.div.metadat$Site_Color[order(fun.div.metadat$Site)])) +
+  geom_boxplot(fill=NA, outlier.color=NA)+theme_bw()+theme_classic()+
+  labs(title = "Fungal Species Richness by Site", x="Site", y="Species Richness", color="Site")+theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15))
+
+ggsave(fun.a.sr,filename = "figures/AlphaDiversity/ITS2_species_richness_site_boxplot.png", width=13, height=10, dpi=600)
+
+fun.a.sr2<-ggplot(fun.div.metadat, aes(x=Location, y=Fun_Species_Richness)) +geom_jitter(aes(color=factor(Location)), size=4, width=0.15, height=0) +
+  scale_color_manual(name ="Location", values=unique(fun.div.metadat$Loc_Color[order(fun.div.metadat$Location)])) +
+  geom_boxplot(fill=NA, outlier.color=NA)+theme_bw()+theme_classic()+
+  labs(title = "Fungal Species Richness by Location", x="Location", y="Species Richness", color="Location")+theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15))
+
+ggsave(fun.a.sr2,filename = "figures/AlphaDiversity/ITS2_species_richness_location_boxplot.png", width=13, height=10, dpi=600)
+
+# fun.a.sr2<-ggplot(fun.div.metadat, aes(x=as.factor(Depth_m), y=Fun_Species_Richness,fill=fun.div.metadat$Depth_m)) +geom_boxplot(aes(fill=as.numeric(fun.div.metadat$Depth_m)),color="black")+
+#   labs(title = "Bacterial Species Richness by Sampling Depth", x="Depth (m)", y="Species Richness", fill="Depth (m)")+
+#   scale_fill_gradient(low="red",high="blue",guide = guide_colourbar(reverse = TRUE)) + theme_classic() +
+#   theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15)) +
+#   coord_flip() + scale_x_discrete(limits=rev)
+#
+# ggsave(fun.a.sr2,filename = "figures/AlphaDiversity/Bacterial_species_richness_depth_boxplot_v1.png", width=13, height=10, dpi=600)
+#
+# fun.a.sr3<-ggplot(fun.div.metadat, aes(x=as.factor(Depth_m), y=Fun_Species_Richness,fill=Depth_m)) +geom_boxplot(aes(fill=as.numeric(fun.div.metadat$Depth_m)),color="black")+
+#   labs(title = "Bacterial Species Richness by Sampling Depth", x="Depth (m)", y="Species Richness", fill="Depth (m)")+
+#   scale_fill_gradient(low="red",high="blue",guide = guide_colourbar(reverse = TRUE)) + theme_classic() +
+#   theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1,,size=10),legend.title.align=0.5, legend.title = element_text(size=13),legend.text = element_text(size=11),plot.title = element_text(size=15))
+#
+# ggsave(fun.a.sr3,filename = "figures/AlphaDiversity/Bacterial_species_richness_depth_boxplot_v2.png", width=13, height=10, dpi=600)
+
+#### Linear Regression/ANOVA Comparisons - Shannon Diversity ####
+## here the focus is comparing env variables of interest to see if they can predict diversity and richness
+head(fun.div.metadat)
+
+# just look at everything at once in step-wise fashion
+step1<-step(glm(formula = Fun_Shannon_Diversity ~ ., data=fun.div.metadat[,c(3,11,13:14,18:20)]))
+
+div.glm.all<-glm(formula = Fun_Shannon_Diversity ~ ., data=fun.div.metadat[,c(3,11,13:14,18:20)])
+summary(div.glm.all)
+
+div.glm.p<-coef(summary(div.glm.all))[,4] # p-values
+Div.GLM.Pval<-data.frame(Div.GLM.AdjPval=p.adjust(div.glm.p, method="bonferroni",n=length(div.glm.p)),Div.GLM.Pval=div.glm.p)
+
+
+s.div.glm.fit1<-glm(formula = Fun_Shannon_Diversity ~ DO_Percent_Local, data=fun.div.metadat)%>%
+  adjust_pvalue(method="bonferroni")
+
+# model form is response ~ terms (y ~ x) where response is the (numeric) response vector and terms is a series of terms which specifies a linear predictor for response.
+summary(s.div.glm.fit1)
+
+# sanity check that lm() vs glm(familiy=Gaussian) is the same thing - and it is!
+summary(lm(formula = Fun_Shannon_Diversity ~ Pb_Conc_Local, data=fun.div.metadat)%>%
+          adjust_pvalue(method="bonferroni"))
+
+# code for mixed effects model
+mixed1 = lmer(Fun_Shannon_Diversity ~ Pb_Conc_Local+ (1 | Depth_m), data = fun.div.metadat)
+summary(mixed1)
+
+# Shan Div ~ Pb_Conc
+plot(Fun_Shannon_Diversity ~ Pb_Conc, data=fun.div.metadat,col=SampDate_Color)
+
+# Shan Div ~ Temp
+
+plot(Fun_Shannon_Diversity ~ Temp, data=fun.div.metadat,col=SampDate_Color)
+
+# Shan Div ~ Moisture
+
+plot(Fun_Shannon_Diversity ~ Moisture, data=fun.div.metadat,col=SampDate_Color)
+
+# Shan Div ~ Perc_Clay
+
+plot(Fun_Shannon_Diversity ~ Perc_Clay, data=fun.div.metadat,col=SampDate_Color)
+
+# Shan Div ~ Perc_Sand
+
+plot(Fun_Shannon_Diversity ~ Perc_Sand, data=fun.div.metadat,col=SampDate_Color)
+
+# Shan Div ~ WEOC
+
+plot(Fun_Shannon_Diversity ~ WEOC, data=fun.div.metadat,col=SampDate_Color)
+
+
+#### Save Everything ####
+save.image("data/survey_fungal_AlphaDiv_Data.Rdata")
