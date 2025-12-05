@@ -1,0 +1,236 @@
+#### Set WD & Load Libraries ####
+getwd() # use setwd("path/to/files") if you are not in the right directory
+suppressPackageStartupMessages({ # load packages quietly
+  library(devtools)
+  library(phyloseq)
+  library(ggplot2)
+  library(vegan)
+  library(ggpubr)
+  #library(scales)
+  library(grid)
+  library(ape)
+  library(plyr)
+  library(dplyr)
+  library(viridis)
+  library(ggbiplot)
+  library(readxl)
+  library(metagenomeSeq)
+  library(DESeq2)
+  library(dplyr)
+  library(magrittr)
+  library(MASS)
+  library(dendextend)
+  library(tidyr)
+  library(reshape)
+  library(reshape2)
+  library(wesanderson)
+  library(nationalparkcolors)
+  library(shades)
+  library(ALDEx2)
+  library(rstatix)
+  library(decontam)
+  library(ggvegan)
+  library(microbiome)
+  library(pairwiseAdonis)
+  library(corrplot)
+})
+
+#### Load Global Env to Import Count/ASV Tables ####
+load("Danielle_Fungal_Data_Ready.Rdata") # save global env to Rdata file
+
+fun.dat.all[1:6,1:6]
+fun.ASV_table[1:4,1:4]
+fun.ASV_table[(nrow(fun.ASV_table)-4):(nrow(fun.ASV_table)),(ncol(fun.ASV_table)-4):(ncol(fun.ASV_table))] # last 4 rows & cols
+head(meta_scaled)
+
+#### Beta Diversity ####
+rownames(fun.ASV_table)
+fun.ASV_table[1:4,1:4]
+
+# RA transformation of ASV table
+# df must have rownames are SampleNames, columns are ASV IDs for vegan functions below
+f.RA<-decostand(fun.ASV_table[,-1],method = "total", pseudocount = 1) #RA transformation
+f.RA[1:4,1:4]
+
+# check rownames of RA transformed ASV data & metadata
+rownames(f.RA) %in% rownames(meta_scaled)
+meta_scaled=meta_scaled[rownames(f.RA),] ## reorder metadata to match order of RA data
+
+# calculate our Bray-Curtis distance matrix using RA data
+f.BC_dist <- vegdist(f.RA, method = "bray")
+
+# creating our hierarcical clustering dendrogram
+f.BC_clust <- hclust(f.BC_dist, method="ward.D2")
+
+# let's make it a little nicer...
+f.BC_dend <- as.dendrogram(f.BC_clust, hang=0.2)
+f.dend_cols <- as.character(meta_scaled$Site_Color[order.dendrogram(f.BC_dend)])
+labels_colors(f.BC_dend) <- f.dend_cols
+
+## DO NOT RUN THIS LINE, THIS IS YOUR COLOR REFERENCE!!!!
+#(August.2021="#ef781c",December.2021="#03045e",April.2022="#059c3f")
+
+plot(f.BC_dend, ylab="RA Bray-Curtis Distance",cex = 0.5) + title(main = "Fungal Clustering Dendrogram", cex.main = 1, font.main= 1, cex.sub = 0.8, font.sub = 2)
+#legend("topright",legend = c("August 2021","December 2021","April 2022"),cex=.8,col = c("#ef781c","#03045e","#059c3f"),pch = 15, bty = "n")
+# Control is dark blue ("#218380"), #Alternaria is light blue ("#73d2de")
+dev.off()
+
+# PCOA w/ Bray-Curtis distance matrix (of RA data)
+f.pcoa <- pcoa(f.BC_dist) # pcoa of Bray-Curtis distance matrix = PCA of Bray-Curtis distance matrix
+#save.image("data/SSW_ITS2_RA_BCDist_PCoA_Ready.Rdata")
+
+# The proportion of variances explained is in its element values$Relative_eig
+head(f.pcoa$values)
+
+# extract principal coordinates
+f.pcoa.vectors<-data.frame(f.pcoa$vectors)
+f.pcoa.vectors$SampleName<-rownames(f.pcoa$vectors)
+
+# merge pcoa coordinates w/ metadata
+f.pcoa.meta<-merge(f.pcoa.vectors, meta_scaled, by.x="SampleName", by.y="SampleName")
+
+head(f.pcoa.meta)
+
+head(f.pcoa$values) # pull out Relative (Relative_eig) variation % to add to axes labels
+# Axis1 = 9.94%, Axis2 = 8.90%
+
+#### Visualize PCoAs ####
+# create PCoA ggplot fig
+pcoa1<-ggplot(f.pcoa.meta, aes(x=Axis.1, y=Axis.2)) +geom_point(aes(color=factor(Site),shape=Location), size=5)+theme_bw()+
+  labs(title="PCoA: FungalBeta Diversity",subtitle="Using Bray-Curtis Distances",color="Site")+theme_classic()+ theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),legend.title.align=0.5, legend.title = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1),legend.text = element_text(size=11))+
+  guides(shape = guide_legend(override.aes = list(size = 5)))+
+  scale_color_manual(name ="Site",values=unique(f.pcoa.meta$Site_Color[order(f.pcoa.meta$Site)])) +
+  xlab("PC1 [9.94%]") + ylab("PC2 [8.90%]")
+
+ggsave(pcoa1,filename = "figures/BetaDiversity/SSW_ITS2_pcoa_RA_Site_Location.png", width=14, height=10, dpi=600)
+
+#### Homogeneity of Variance & PERMANOVA tests - Composition by Groups ####
+## betadisper to look at homogeneity of group dispersions (aka variance) when considering multiple variables
+# multivariate analogue to Levene's test of homogeneity of variances
+# program finds spatial median or centroid of the group, & compare distances of group to centroid/spatial median via ANOVA
+
+#While PERMANOVA tests differences in group means (analogous to MANOVA),
+## a related test called PERMDISP can be used to evaluate homogeneity of group dispersion
+#(analogous to Levene's test for equal variances). The vegan function for this test is “betadisper”:
+## * need a distance matrix!
+
+rownames(meta_scaled) %in% rownames(f.RA) #f.RA was used to make the distance matrix f.BC_dist
+
+# first by compare dispersions by sampling date
+f.disper1<-betadisper((vegdist(f.RA,method="Bray-Curtis")), meta_scaled$Site)
+f.disper1
+
+## Significant differences in homogeneities can be tested using either parametric or permutational tests,
+##and parametric post hoc contrasts can also be investigated:
+
+permutest(f.disper1, pairwise=TRUE) # compare dispersions to each other via permutation test to see significant differences in dispersion by pairwise comparisons
+#Pairwise comparisons:
+#  (Observed p-value below diagonal, permuted p-value above diagonal)
+#                 August.2021 December.2021 April.2022
+# August.2021                   0.0040000      0.001
+# December.2021   0.0073988                    0.115
+# April.2022      0.0012603     0.1201286
+
+# anova used to check null hypothesis of group dispersion: "Null hypothesis of no difference in dispersion between groups"
+anova(f.disper1) # p = 0.0003451 --> reject the Null H, spatial medians (a measure of dispersion) are significantly difference across sample dates
+
+TukeyHSD(f.disper1) # tells us which Sample Dates/category's dispersion MEANS are significantly different than each other
+#                               diff       lwr       upr     p adj
+# December.2021-August.2021 -4.556897 -7.631983 -1.481811 0.0033548
+# April.2022-August.2021    -5.605532 -8.680617 -2.530446 0.0004428
+# April.2022-December.2021  -1.048634 -4.123720  2.026451 0.6710007
+
+# If PERMANOVA is significant but betadisper() IS NOT, then you can infer that there is only a location effect.
+# If both tests are significant, then there is a dispersion effect for sure and there might also be (not always) a location effect.
+# Dispersion effect means the actual spread of the data points is influencing the significant differences, not the actual data itself
+
+pnova1<-adonis2(f.RA ~ Site,data=meta_scaled,method = "Bray-Curtis",by="terms",permutations=1000)
+pnova1 # p-value = 0.000999
+p.adjust(pnova1[["Pr(>F)"]],method="bonferroni",n=3)
+
+##one issue with adonis is that it doesn't do multiple comparisons *******
+# tells us that something is different, but what is different? Which sample/plot/location?
+## our 3 dates differ, but do all of them differ,or just one?
+
+##random person on the internet to the rescue!
+#install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+
+f.RA.dist = (vegdist(f.RA, "Bray-Curtis", na.rm = TRUE)) #distance matrix using Bray's dissimilarity index for trait distribution (traits of interest only)
+pair.mod1<-pairwise.adonis(f.RA.dist,meta_scaled$Site, p.adjust.m='bonferroni') # shows us variation for each sample to see which ones are different
+pair.mod1
+#                           pairs Df SumsOfSqs  F.Model        R2 p.value p.adjusted sig
+# 1  December.2021 vs April.2022  1  7006.287 17.13323 0.5503196   0.001      0.003   *
+# 2 December.2021 vs August.2021  1  7416.531 13.48028 0.4905437   0.001      0.003   *
+# 3    April.2022 vs August.2021  1  7987.429 15.15788 0.5198554   0.001      0.003   *
+
+# Visualize dispersions
+png('figures/BetaDiversity/pcoa_betadispersion_sampledate.png',width = 700, height = 600, res=100)
+plot(f.disper1,main = "Centroids and Dispersion based on Aitchison Distance", col=colorset1$Site_Color)
+dev.off()
+
+png('boxplot_centroid_distance_sampledate.png',width = 700, height = 600, res=100)
+boxplot(f.disper1,xlab="Sample Collection Date", main = "Distance to Centroid by Category", sub="Based on Aitchison Distance", col=colorset1$Site_Color)
+dev.off()
+
+# Next compare dispersions by depth
+f.disper2<-betadisper((vegdist(f.RA,method="Bray-Curtis")), meta_scaled$Site)
+f.disper2
+
+permutest(f.disper2, pairwise=TRUE) # compare dispersions to each other via permutation test to see significant differences in dispersion by pairwise comparisons
+
+anova(f.disper2) # p = 0.6277 --> accept the Null H, spatial medians are NOT significantly difference across sample dates
+
+TukeyHSD(f.disper2) # tells us which Sample Dates/category's dispersion MEANS are significantly different than each other
+# no sig results
+
+# If PERMANOVA is significant but betadisper() IS NOT, then you can infer that there is only a location effect.
+# If both tests are significant, then there is a dispersion effect for sure and there might also be (not always) a location effect.
+# Dispersion effect means the actual spread of the data points is influencing the significant differences, not the actual data itself
+
+pnova2<-adonis2(f.RA ~ Site,data=meta_scaled,method = "Bray-Curtis",by="terms",permutations=1000)
+pnova2 # p-value = 1
+
+#f.RA.dist = (vegdist(f.RA, "Bray-Curtis", na.rm = TRUE)) #distance matrix using Bray's dissimilarity index for trait distribution (traits of interest only)
+pair.mod2<-pairwise.adonis(f.RA.dist,meta_scaled$Site, p.adjust.m='bonferroni') # shows us variation for each sample to see which ones are different
+pair.mod2
+# none are significantly different
+
+col.depth <- colorRampPalette(c("red", "blue"))
+col.depth(9)
+
+# Visualize dispersions
+png('figures/BetaDiversity/pcoa_betadispersion_depth.png',width = 700, height = 600, res=100)
+plot(f.disper2,main = "Centroids and Dispersion based on Aitchison Distance", col=col.depth(9))
+dev.off()
+
+png('figures/BetaDiversity/boxplot_centroid_distance_depth.png',width = 700, height = 600, res=100)
+boxplot(f.disper2,xlab="Sample Collection Depth", main = "Distance to Centroid by Category", sub="Based on Aitchison Distance", col=col.depth(9))
+dev.off()
+
+#### PERMANOVAs to Env Variables Across Groups ####
+
+## The currently preferred analysis for evaluating differences among groups is PERMANOVA.
+## This analysis partitions sums of squares using dissimilarities,
+##  evaluating differences in the centroids of groups in multivariate space.
+##  The vegan functions “adonis” and “adonis2” are used to compute PERMANOVA in R.
+
+## NOTE: ADONIS2 & Continuous Variables!
+## Variation explained is directly analogous to that of general linear models.
+## With a continuous variable, it acts like simple linear regression, where each point is associated with its own "centroid" which is the best fit linear approximation
+# More info here: https://uw.pressbooks.pub/appliedmultivariatestatistics/chapter/permanova/
+help(adonis)
+
+## can specify dataframes for analysis, or we can alternatively specify a dissimilarity matrix:
+
+#Other advantages of using PERMANOVA are that we can test for interactions between predictor variables,
+## and we can use both categorical and continuous predictor variables.
+## An advantage of adonis2 is that we can test for overall model fit, setting by=NULL, or by individual terms (w/ by="terms")
+## w/ distance matrices - The adonis2 tests are identical to anova.cca of dbrda. With Bray-Curtis distances, the tests are also identical to anova.cca of rda.
+
+# create column for Depth that is a numeric version of this variable, rather than a factor
+meta_scaled$Depth.num<-as.numeric(as.character(meta_scaled$Site))
+
+# now make sure your data frames you're comparing are in the same exact order!!
+rownames(f.RA) %in% rownames(meta_scaled)
+meta_scaled=meta_scaled[rownames(f.RA),] ## reorder metadata to match order of RA data
+perm <- with(meta_scaled, how(nperm = 1000)) 
