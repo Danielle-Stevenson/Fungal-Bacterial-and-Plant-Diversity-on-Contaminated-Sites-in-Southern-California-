@@ -1,0 +1,658 @@
+title: "Survey Analysis"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(reshape2)
+library(readxl)
+library(tidyr)
+library(ggplot2)
+```
+
+
+### Soil sequential metal extractions
+
+```{r}
+df <- read_csv("/Users/Danielle/Desktop/Publications/survey/data/SoilMetalExtractions_survey.csv",  
+col_names = c("sample_key", 
+                              "Water_As",
+                              "Water_Cd",
+                              "Water_Pb",
+                              "Exchangeable_As",
+                              "Exchangeable_Cd",
+                              "Exchangeable_Pb",
+                              "Weak Acid Extractable_As",
+                              "Weak Acid Extractable_Cd",
+                              "Weak Acid Extractable_Pb"
+                              )
+                ) %>% 
+  melt("sample_key") %>% 
+  separate_wider_delim(variable,delim = "_", names = c("Extraction", "Metal")) %>% 
+  mutate(site=substr(sample_key, 0,2))
+             
+```
+
+```{r fig.width=8, fig.height=8}
+ggplot(df) + aes(x=site, y=value, color=site) + 
+  geom_boxplot(outlier.shape=NA) + 
+  geom_point(position=position_jitter(.05), alpha=.4) +
+  scale_y_log10("Concentration (ppb)", labels=scales::label_log()) +
+  facet_wrap(Extraction~Metal)
+```
+
+### Identification of plant metal accumulators
+
+```{r}
+
+df <- read_xlsx("/Users/Danielle/Desktop/Plantmetaldata_survey.xlsx", 
+                sheet = "Sheet2", 
+                range = "A5:G27",
+                col_names = c("Species",
+                              "Cr",
+                              "Ni",
+                              "Cu",
+                              "As",
+                              "Cd",
+                              "Pb"
+                              )
+                ) %>% 
+      na.omit() %>% 
+      melt("Species", variable.name = "Metal", value.name = "Uptake") %>% 
+      separate_wider_delim("Uptake", "±", names=c("Uptake_mean", "Uptake_sd")) %>% 
+      mutate(Uptake_mean=as.numeric(Uptake_mean), Uptake_sd=as.numeric(Uptake_sd)) %>% 
+      mutate(native=Species %in% c("Brickellia californica",
+                                    "Eriogonum fasciculatum",
+                                    "Baccharis pilularis",
+                                    "Baccharis sarothroides",
+                                    "Encelia californica",
+                                    "Baccharis salicifolia",
+                                    "Heterotheca grandiflora")
+             )
+
+# Below sets the hyperaccumulator thresholds, which appear as a dashed line.
+#  > 100 ug g-1cadmium, thallium or selenium
+# > 300 ug g-1 of cobalt, copper or chromium
+# > 1000 ug g-1 of nickel, arsenic, lead or rare earth elements
+# > 3000 ug g-1 of zinc, or > 10 000 ug g-1 of manganese
+
+hyper_cuts <- data.frame(Metal=c('Cr', 'Ni', 'Cu', 'As', 'Cd', 'Pb'),
+                         thresh = c(300, 1000, 300, 1000, 100, 1000))
+
+
+```
+
+```{r fig.height=14, fig.width=8}
+ggplot(df) + aes(y=factor(Species, Species %>% unique %>% sort(decreasing=TRUE)), x=Uptake_mean, xmin=Uptake_mean-Uptake_sd, xmax=Uptake_mean+Uptake_sd, color=Metal, group=Metal, alpha=native) +
+  geom_pointrange(position=position_dodge(width=.5)) +
+  geom_vline(aes(xintercept=thresh, group=Metal), data=hyper_cuts, linetype='dashed') +
+  scale_x_log10("Uptake", labels=scales::label_log()) + 
+  scale_y_discrete("Species") +
+  scale_alpha_manual(values = c(.3, 1)) + facet_wrap(~Metal, scales = "free_x")
+```
+
+### Microbial biomass and Spores by site and by contamination level
+
+```{r}
+mb <- read_xlsx("/Users/Danielle/Desktop/Publications/survey/Microbial biomass x metals.xlsx") %>% 
+  inner_join(read_xlsx("/Users/Danielle/Desktop/Publications/survey/AMFSporeCountsDiversityandContamLevel.xlsx"))
+
+```
+
+# Assuming dataframe is called `df` with columns:
+
+# - microbial_biomass (numeric)
+
+# - site (factor or character)
+
+```{r}
+library(dplyr)
+
+mb %>%
+  group_by(SiteCode) %>%
+  summarise(shapiro_p = shapiro.test(Microbial_biomass)$p.value)
+
+```
+
+```{r}
+install.packages("FSA")
+install.packages("kableExtra")
+
+```
+
+```{r}
+kruskal.test(Microbial_biomass ~ SiteCode, data = mb)
+
+# Post-hoc Dunn’s test
+library(FSA)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+dunn_results <- dunnTest(Microbial_biomass ~ SiteCode, data = mb, method = "bh")  # 'bh' = Benjamini-Hochberg FDR correction
+
+# Extract the results table
+dunn_table <- dunn_results$res
+
+# View the full table with comparisons and adjusted p-values
+dunn_table %>%
+  rename(
+    Comparison = Comparison,
+    Z_statistic = Z,
+    Raw_p = P.unadj,
+    Adjusted_p = P.adj
+  )
+
+# Clean up the results table
+dunn_table <- dunn_results$res %>%
+  rename(
+    `Site Comparison` = Comparison,
+    `Z Statistic` = Z,
+    `Raw p-value` = P.unadj,
+    `Adjusted p-value` = P.adj
+  ) %>%
+  mutate(`Significance` = case_when(
+    `Adjusted p-value` < 0.001 ~ "***",
+    `Adjusted p-value` < 0.01 ~ "**",
+    `Adjusted p-value` < 0.05 ~ "*",
+    TRUE ~ ""
+  ))
+
+kable(dunn_table, digits = 4, align = "c", caption = "Pairwise Dunn’s Test for Microbial Biomass Across Sites") %>%
+  kable_styling(full_width = FALSE, position = "center", bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+```{r}
+library(dplyr)
+
+mb_summary <- mb %>%
+  group_by(SiteCode) %>%
+  summarise(
+    mean_biomass = mean(Microbial_biomass, na.rm = TRUE),
+    sd_biomass = sd(Microbial_biomass, na.rm = TRUE),
+    n = n()
+  ) %>%
+  arrange(desc(mean_biomass))  # Optional: order by highest average
+
+mb_summary
+
+```
+
+```{r}
+
+str(data_corr)
+
+```
+
+```{r}
+library(dplyr)
+library(corrplot)
+
+# Select relevant columns
+data_corr <- mb %>%
+  select(Microbial_biomass, PbConc, CdConc, AsConc, CrConc, DieselLevel, PAHsLevel, VOC_Level, PCB_Level, PCE_TCELevel)
+
+# Compute correlation matrix
+cor_matrix <- cor(data_corr, use = "pairwise.complete.obs", method = "spearman")
+
+# Generate nicer labels
+label_names <- gsub("_", " ", colnames(data_corr))
+label_names <- gsub("([a-z])([A-Z])", "\\1 \\2", label_names) # Add space before capital letters
+label_names <- tools::toTitleCase(label_names)
+
+# Rename rows and columns of correlation matrix
+colnames(cor_matrix) <- label_names
+rownames(cor_matrix) <- label_names
+
+# Function to compute p-values
+cor_pmat <- function(x) {
+  mat <- matrix(NA, ncol = ncol(x), nrow = ncol(x))
+  colnames(mat) <- rownames(mat) <- colnames(x)
+  for (i in 1:ncol(x)) {
+    for (j in 1:ncol(x)) {
+      xi <- as.vector(x[[i]])
+      xj <- as.vector(x[[j]])
+      mat[i, j] <- cor.test(xi, xj, use = "pairwise.complete.obs")$p.value
+    }
+  }
+  mat
+}
+
+# Compute p-value matrix and apply same labels
+p.mat <- cor_pmat(data_corr)
+colnames(p.mat) <- label_names
+rownames(p.mat) <- label_names
+
+# Plot with improved labels and colors
+corrplot(cor_matrix,
+         method = "color",
+         type = "upper",
+         tl.col = "black",
+         tl.srt = 45,
+         addCoef.col = "black",
+         number.cex = 0.7,
+         p.mat = p.mat,
+         sig.level = 0.05,
+         insig = "blank")
+
+
+
+```
+
+```{r}
+library(corrplot)
+library(ggplot2)
+
+# Create heatmap of correlations with significance stars
+ggplot(final_corrs, aes(x = Contaminant, y = AMF_Var, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(Correlation, Significance)), size = 4, color = "black") +
+  scale_fill_gradient2(low = "darkred", mid = "white", high = "darkgreen",
+                       midpoint = 0, limits = c(-1, 1), name = "Correlation") +
+  labs(title = "Correlation Between AMF Metrics and Contaminants",
+       x = "Contaminant",
+       y = "AMF Metric") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r}
+library(dplyr)
+
+vars_to_check <- mb %>%
+  select(AMF_spore_count, AMF_Diversity, PbConc, CdConc, AsConc, CrConc, DieselLevel, PAHsLevel, VOC_Level, PCB_Level, PCE_TCELevel) %>%
+  mutate(across(everything(), ~as.numeric(as.character(.))))
+
+# Shapiro-Wilk test for each variable
+sapply(vars_to_check, function(x) shapiro.test(x)$p.value)
+
+```
+
+```{r}
+library(dplyr)
+library(tibble)
+
+# Define variable groups
+amf_vars <- c("AMF_spore_count", "AMF_Diversity")
+contaminants <- c("PbConc", "CdConc", "AsConc", "CrConc", "DieselLevel", 
+                  "PAHsLevel", "VOC_Level", "PCB_Level", "PCE_TCELevel")
+
+all_vars <- c(amf_vars, contaminants)
+
+# Clean numeric conversion
+amf_clean <- mb %>%
+  mutate(across(all_of(all_vars), ~as.numeric(as.character(.))))
+
+# Step 1: Run Shapiro-Wilk normality test ONCE per variable
+normality <- sapply(amf_clean[all_vars], function(x) {
+  x <- na.omit(x)
+  if (length(x) < 3) return(NA)  # avoid crash on short vectors
+  shapiro.test(x)$p.value
+})
+
+# Convert to logical: TRUE = normal
+is_normal <- normality > 0.05
+
+# Step 2: Correlation test function using precomputed normality
+run_corr_test <- function(data, amf_name, contam_name, normal_flags) {
+  x <- data[[amf_name]]
+  y <- data[[contam_name]]
+  
+  method <- if (normal_flags[amf_name] & normal_flags[contam_name]) {
+    "pearson"
+  } else {
+    "spearman"
+  }
+  
+  test <- cor.test(x, y, method = method, use = "pairwise.complete.obs")
+  
+  tibble(
+    AMF_Var = amf_name,
+    Contaminant = contam_name,
+    Method = method,
+    Correlation = round(test$estimate, 3),
+    P_value = round(test$p.value, 4)
+  )
+}
+
+# Step 3: Run tests across all combinations
+results <- bind_rows(
+  lapply(amf_vars, function(a) {
+    lapply(contaminants, function(c) {
+      run_corr_test(amf_clean, a, c, is_normal)
+    }) %>% bind_rows()
+  })
+)
+
+# View results
+# Add significance stars
+results <- results %>%
+  mutate(Significance = case_when(
+    P_value < 0.001 ~ "***",
+    P_value < 0.01 ~ "**",
+    P_value < 0.05 ~ "*",
+    TRUE ~ ""
+  ))
+
+# View final annotated table
+results
+
+```
+
+```{r}
+library(FSA)
+library(dplyr)
+library(ggpubr)
+
+# AMF Diversity: if normally distributed, use ANOVA
+anova_div <- aov(AMF_Diversity ~ SiteCode, data = mb)
+summary(anova_div)
+
+# Post-hoc: Tukey's HSD
+div_posthoc <- TukeyHSD(anova_div)
+
+print(div_posthoc) 
+
+library(ggplot2)
+library(ggpubr)     # For stat_pvalue_manual or stat_compare_means
+library(dplyr)
+
+ggplot(anova_div, aes(x = SiteCode, y = AMF_Diversity, fill = SiteCode)) +
+  geom_boxplot(show.legend = FALSE) +
+  geom_text(data = cld_df, aes(x = SiteCode, y = max(mb$AMF_diversity, na.rm = TRUE) + 0.05, label = label), 
+            inherit.aes = FALSE, size = 5) +
+  labs(title = "AMF Diversity by Site", x = "Site", y = "AMF Diversity") +
+  theme_minimal(base_size = 14)
+```
+
+# AMF Spore Count: Kruskal-Wallis (non-parametric)
+kruskal_spores <- kruskal.test(AMF_spore_count ~ SiteCode, data = amf)
+kruskal_spores  # Overall test result
+
+# Post-hoc: Dunn’s test with BH adjustment
+dunn_spores <- dunnTest(AMF_spore_count ~ SiteCode, data = amf, method = "bh")
+spore_posthoc <- dunn_spores$res
+
+
+#### Parallel coords plot with all variables:
+
+```{r}
+mb %>% 
+  select(SampleName, SiteCode, Location,
+         biomass=`Microbial_biomass(ug_g)`,
+         n_spores=`# Spores`,
+         Diversity, 
+         PbConc, CdConc, AsConc, CrConc,
+         DieselLevel, PAHsLevel, PCE_TCELevel, PCE_TCELevel, VOC_Level, PCB_Level
+         ) %>% 
+  melt(c("SampleName", "SiteCode", "Location")) %>% 
+  group_by(variable) %>% 
+  mutate(z=scale(value)) %>% 
+  ggplot() + aes(x=variable, y=z, color=Location, group=SampleName) + 
+  geom_hline(yintercept=0, linetype='dashed') + 
+  geom_point() + 
+  geom_line() + 
+  scale_y_continuous(breaks=-2:2, minor_breaks = seq(-3, 3, by=.5)) +
+  coord_flip() + facet_wrap(~SiteCode)
+```
+
+#### Variable x Level
+
+```{r}
+ggplot(df) +
+  aes(x=DieselLevel, y=`Microbial_biomass(ug_g)`, color=Location, group=interaction(DieselLevel,Location)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(alpha=.6, position=position_jitterdodge(dodge.width = .8, jitter.width = .1, seed = 12345)) +
+  scale_y_log10(labels=scales::label_log())
+```
+
+```{r}
+ggplot(df) +
+  aes(x=DieselLevel, y=Diversity, color=Location, group=interaction(DieselLevel,Location)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(alpha=.6, position=position_jitterdodge(dodge.width = .8, jitter.width = .1, seed = 12345)) +
+  scale_y_log10(labels=scales::label_log())
+```
+
+```{r}
+ggplot(df) +
+  aes(x=`Microbial_biomass(ug_g)`, y=Diversity, color=SiteCode, shape = Location) +
+  geom_point(size=3) +
+  scale_x_log10(labels=scales::label_log()) + 
+  scale_y_log10(labels=scales::label_log()) + 
+  facet_wrap(~SiteCode)
+```
+
+### Bacterial and fungal figures
+
+```{r}
+df <- read.csv("data/raw/fungal and bacterial data/ITS2_Genera_Relative_Abundance.csv", nrows = 69)%>% 
+  dplyr::select(-X) %>% 
+  melt("SampleName", variable.name="Species", value.name = "Abundance") %>% 
+  mutate(Site=substr(SampleName, 0,2)) %>% 
+  filter(Abundance > 0) 
+```
+
+```{r fig.height=15, fig.width=8}
+ggplot(df) +
+  aes(x=Species, y=Abundance, group=SampleName) + 
+  geom_point() +
+  geom_line(alpha=.1) + 
+  theme(axis.text.x=element_text(angle=90)) + 
+  scale_y_continuous(labels=scales::label_percent()) + 
+  facet_grid(Site~.)
+```
+
+### Relationships between Microbial Composition and Soil Variables
+
+```{r}
+
+# require(CCA, quietly = TRUE)
+# require(CCP, quietly = TRUE)
+
+```
+
+```{r}
+abundance <- read.csv("data/raw/fungal and bacterial data/ITS2_Genera_Relative_Abundance.csv", nrows = 69)%>% 
+  dplyr::select(-X) %>% 
+  tibble::column_to_rownames("SampleName")
+
+map <- read.csv("data/raw/fungal and bacterial data/map.csv")%>% 
+  tibble::column_to_rownames("SampleName") %>% 
+  dplyr::select(PbConc:CEC)
+
+# This puts the two data sets into the same order by SampleName
+map <- map[rownames(abundance), ]
+```
+
+```{r}
+# cc1 <- cc(map, abundance)
+```
+
+```{r}
+# cc1$cor
+```
+
+```{r}
+# compute canonical loadings
+# cc2 <- comput(map, abundance, cc1)
+
+# display canonical loadings
+# cc2[3:6]
+```
+
+```{r}
+# tests of canonical dimensions
+# rho <- cc1$cor
+## Define number of observations, number of variables in first set, and number of variables in the second set.
+# n <- dim(map)[1]
+# p <- length(map)
+# q <- length(abundance)
+
+## Calculate p-values using the F-approximations of different test statistics:
+# p.asym(rho, n, p, q, tstat = "Wilks")
+```
+
+```{r}
+# plt.cc(cc1)
+```
+
+##### Using `vegan` instead
+
+```{r}
+require(vegan)
+```
+
+```{r}
+cc1 <- vegan::ca(X=map, Y=abundance) 
+```
+
+```{r}
+screeplot(cc1)
+```
+
+```{r}
+plot(cc1)
+```
+
+```{r}
+plot(cc1, display="species")
+```
+
+```{r}
+anova(cc1)
+```
+
+#### LEfSe
+
+```{r}
+# Install lefser if necessary
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("lefser")
+```
+
+```{r}
+require(lefser, quietly=TRUE)
+```
+
+```{r}
+se <- SummarizedExperiment(
+  assays = list(counts = t(abundance)), 
+  colData = map %>% transform(#CLASS = ifelse(pH > 7, "basic", "acidic") %>% as.factor,
+                              CLASS = ifelse(grepl("R", rownames(map)), "Rhizosphere", "Interspace")
+  )
+)
+```
+
+```{r}
+lefse_results <- lefser(
+  se,                           # The SummarizedExperiment object
+  classCol  = "CLASS",         # Column in map to indicate grouping (replace with your column name)
+  num_cores = 4                 # Adjust the number of cores as needed
+)
+
+# View the results
+lefse_results
+```
+
+```{r}
+library(dplyr)
+
+# Define variables
+amf_vars <- c("AMF_spore_count", "AMF_Diversity")
+contaminants <- c("PbConc", "CdConc", "AsConc", "CrConc", "DieselLevel", 
+                  "PAHsLevel", "VOC_Level", "PCB_Level", "PCE_TCELevel")
+
+# Ensure numeric
+amf_clean <- mb %>%
+  mutate(across(all_of(c(amf_vars, contaminants)), ~as.numeric(as.character(.))))
+
+```
+
+```{r}
+# Create function for one AMF var vs all contaminants
+correlate_amf <- function(amf_var, method) {
+  results <- lapply(contaminants, function(contam) {
+    test <- cor.test(amf_clean[[amf_var]], amf_clean[[contam]], method = method, use = "pairwise.complete.obs")
+    data.frame(
+      AMF_Var = amf_var,
+      Contaminant = contam,
+      Correlation = round(test$estimate, 3),
+      P_value = round(test$p.value, 4),
+      Method = method
+    )
+  })
+  do.call(rbind, results)
+}
+
+# Run separately for each AMF metric
+results_spore <- correlate_amf("AMF_spore_count", "spearman")
+results_div   <- correlate_amf("AMF_Diversity", "pearson")
+
+# Combine into one table
+final_corrs <- bind_rows(results_spore, results_div)
+
+# Add significance stars
+final_corrs <- final_corrs %>%
+  mutate(Significance = case_when(
+    P_value < 0.001 ~ "***",
+    P_value < 0.01 ~ "**",
+    P_value < 0.05 ~ "*",
+    TRUE ~ ""
+  ))
+
+final_corrs
+
+```
+
+```{r}
+library(ggplot2)
+library(stringr)
+
+# Remove underscores and simplify contaminant names
+final_corrs$Contaminant <- str_replace_all(final_corrs$Contaminant, "_", " ")
+final_corrs$Contaminant <- str_replace_all(final_corrs$Contaminant, "(Conc|Level)$", "")
+final_corrs$AMF_Var <- str_replace_all(final_corrs$AMF_Var, "_", " ")
+
+# Create heatmap of correlations with significance stars
+ggplot(final_corrs, aes(x = Contaminant, y = AMF_Var, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = paste0(Correlation, Significance)), size = 4, color = "black") +
+  scale_fill_gradient2(
+    low = "grey40",  # Darker grey for better contrast
+    mid = "#f7f7f7",
+    high = "#014421",  # Deep forest green
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation"
+  ) +
+  labs(
+    title = "Correlation Between AMF Metrics and Contaminants",
+    x = "Contaminant",
+    y = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    panel.border = element_rect(color = "grey80", fill = NA),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+```
+
+
