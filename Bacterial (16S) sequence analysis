@@ -1,0 +1,145 @@
+#### Set WD & Load Libraries ####
+
+setwd("/Users/Danielle/Desktop/Survey/") 
+suppressPackageStartupMessages({ # load packages quietly
+  library(phyloseq)
+  library(ggplot2)
+  library(vegan)
+  library(ggpubr)
+  library(scales)
+  library(grid)
+  library(ape)
+  library(plyr)
+  library(dplyr)
+  library(viridis)
+  library(readxl)
+  library(metagenomeSeq)
+  library(DESeq2)
+  library(dplyr)
+  library(magrittr)
+  library(MASS)
+  library(dendextend)
+  library(tidyr)
+  library(reshape)
+  library(reshape2)
+  library(wesanderson)
+  library(nationalparkcolors)
+  library(shades)
+  install.packages("ALDEx2")
+  library(ALDEx2)
+  library(rstatix)
+  library(devtools)
+  library(decontam)
+})
+
+#install.packages("reshape") if (!requireNamespace("BiocManager", quietly=TRUE))
+ # install.packages("BiocManager")
+#BiocManager::install("metagenomeSeq")
+  
+ # install.packages("devtools")
+library("devtools")
+#install_github("Bioconductor-mirror/metagenomeSeq")
+#### Import and Prepare Data for Analyses ####
+b.ASV_counts<-data.frame(read.csv("16S_ASV_Counts.csv"))
+dim(b.ASV_counts)
+b.ASV_counts[1:4,1:4]
+
+## Import ALL env plate bacterial ASV count data
+#b.ASV_counts<-data.frame(readRDS("16S_ASVs_Counts_dada2_Robject.rds", refhook = NULL))
+#dim(b.ASV_counts)
+#b.ASV_counts[1:4,1:4]
+
+# then prep ASV counts data frame for merging with taxa info later
+b.ASV_counts$ASV_ID<-rownames(b.ASV_counts)
+head(b.ASV_counts)
+colnames(b.ASV_counts)
+dim(b.ASV_counts)
+
+## Import ASV taxonomic data
+b.ASV_tax<-data.frame(read.csv("16S_Taxonomy_ASV.csv"))
+head(b.ASV_tax)
+
+# edit taxa names to exclude leading characteres
+b.ASV_tax<-as.data.frame(apply(b.ASV_tax,2, function(x) gsub("[^.]__", "", x))) # remove leading letters and __ with gsub
+
+b.ASV_tax[is.na(b.ASV_tax)]<- "Unknown" # turn all NAs into "Unkowns"
+b.ASV_tax$Species<-gsub("Unknown", "unknown", b.ASV_tax$Species) # change uppercase Unkonwn to lowercase unknown for unknown species classification
+head(b.ASV_tax)
+b.ASV_tax$ASV_ID<-rownames(b.ASV_tax) # create ASV ID column to use for merging data frames
+head(b.ASV_tax)
+
+#### Import metadata ####
+
+# Import all metadata
+metadata<-as.data.frame(read.csv("map.csv"), header=TRUE)
+head(metadata)
+
+#### Scale Environmental Metadata ####
+head(metadata)
+meta_scaled<-metadata
+meta_scaled[,7:17]<-scale(meta_scaled[,7:17],center=TRUE,scale=TRUE) # only scale chem env data
+head(meta_scaled)
+
+#### Create colors for variables of interest ####
+unique(meta_scaled$Site)
+unique(meta_scaled$Location)
+
+# Add colors for specific variables
+
+# color for site
+colorset1 = melt(c(B7071="blue",GATX="violet",B44="olivedrab",WD="green",TY="purple",SL="gold1",LA="firebrick1"))
+
+colorset1$Site<-rownames(colorset1)
+colnames(colorset1)[which(names(colorset1) == "value")] <- "Site_Color"
+colorset1
+
+meta_scaled<-merge(meta_scaled, colorset1, by="Site")
+head(meta_scaled)
+meta_scaled$Site_Color <- as.character(meta_scaled$Site_Color)
+
+rownames(meta_scaled)<-meta_scaled$SampleName
+
+# color for location
+colorset2 = melt(c(Interspace="goldenrod1",Rhizosphere="coral4"))
+
+colorset2$Location<-rownames(colorset2)
+colnames(colorset2)[which(names(colorset2) == "value")] <- "Loc_Color"
+colorset2
+
+meta_scaled<-merge(meta_scaled, colorset2, by="Location")
+head(meta_scaled)
+meta_scaled$Loc_Color <- as.character(meta_scaled$Loc_Color)
+
+rownames(meta_scaled)<-meta_scaled$SampleName
+
+### Merge All Data Together ####
+
+# first merge taxonomy and ASV counts
+bac.count.tax<-merge(b.ASV_counts, b.ASV_tax, by=c("ASV_ID"))
+head(bac.count.tax) # contains ASV counts per sample + ASV taxonomic ID info for each ASV
+
+# next, let's melt this count.tax data frame
+library(reshape)
+library(reshape2)
+bac.ct.melt<-melt(bac.count.tax, by=c("ASV_ID","Kingdom","Phylum","Class","Order","Family","Genus","Species"))
+head(bac.ct.melt)
+colnames(bac.ct.melt)[which(names(bac.ct.melt) == "variable")] <- "NamesFeatTab"
+colnames(bac.ct.melt)[which(names(bac.ct.melt) == "value")] <- "Count"
+head(bac.ct.melt)
+
+# now we will merge melted count/taxa table with the SCALED metadata
+bac.dat.all<-merge(bac.ct.melt,meta_scaled)
+head(bac.dat.all)
+
+#### Create NEW ASV table with correct sample names ####
+
+# create ASV table (so sample IDs are rows, ASVs are columns -- this is for all vegan() package functions)
+library(reshape2)
+library(vegan)
+bac.ASV_table <- as.data.frame(dcast(bac.dat.all, SampleName~ASV_ID, value.var="Count", bac.aggregate=sum)) ###
+bac.ASV_table[1:4,1:4]
+rownames(bac.ASV_table)<-bac.ASV_table$SampleName
+bac.ASV_table[1:4,1:4]
+
+### Export Global Env for Other Scripts ####
+save.image("Danielle_Bacterial_Data_Ready.Rdata")
