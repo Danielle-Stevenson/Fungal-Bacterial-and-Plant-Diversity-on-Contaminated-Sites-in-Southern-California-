@@ -1,0 +1,452 @@
+#### Set WD & Load Libraries ####
+getwd() # use setwd("path/to/files") if you are not in the right directory
+suppressPackageStartupMessages({ # load packages quietly
+  library(phyloseq)
+  library(ggplot2)
+  library(vegan)
+  library(ggpubr)
+  #library(scales)
+  library(grid)
+  library(ape)
+  library(plyr)
+  library(dplyr)
+  library(viridis)
+  library(readxl)
+  library(metagenomeSeq)
+  library(DESeq2)
+  library(dplyr)
+  library(magrittr)
+  library(MASS)
+  library(dendextend)
+  library(tidyr)
+  library(reshape)
+  library(reshape2)
+  library(wesanderson)
+  library(nationalparkcolors)
+  library(shades)
+  library(ALDEx2)
+  library(rstatix)
+  library(devtools)
+  library(decontam)
+  library(ggvegan)
+  library(microbiome)
+})
+
+#### Load Global Env to Import Count/ASV Tables ####
+load("Danielle_Fungal_Data_Ready.Rdata") # save global env to Rdata file
+#load("data/Amplicon_EnvDriver.Rdata")
+#load("data/Amplicon_EnvDriver_RDAsOnly.Rdata")
+
+fun.dat.all[1:4,1:4]
+fun.ASV_table[,1:4]
+fun.ASV_table[(nrow(fun.ASV_table)-4):(nrow(fun.ASV_table)),(ncol(fun.ASV_table)-4):(ncol(fun.ASV_table))] # last 4 rows & cols
+
+head(metadata)
+head(meta_scaled)
+
+#### Create Relative Abundance Table from ASV table ####
+
+# RA transformation of ASV table
+# df must have rownames are SampleNames, columns are ASV IDs for vegan functions below
+f.RA<-decostand(fun.ASV_table[,-1],method = "total", pseudocount = 1) #RA transformation
+f.RA[1:4,1:4]
+
+# check rownames of RA transformed ASV data & metadata
+rownames(f.RA) %in% rownames(meta_scaled)
+meta_scaled=meta_scaled[rownames(f.RA),] ## reorder metadata to match order of RA data
+
+# #### Separate All Data by Timepoints ####
+# # create metadata df that will contain scaled chemical data
+# head(metadata)
+# head(meta_scaled)
+#
+# site_list<-unique(meta_scaled$Location) #define an array of string values
+# # go through metadata & create a list of data frames
+# ## when metadata$Variable == element in site_list (aka x in this case), subset metadata by said element into elements of a list
+#
+# # here the function(x) is using site_list aka x to subset metadata, when $Variable column == site_list
+# # Run the function so it's stored in Global Env
+# site_subsets<-lapply(site_list, function(x) {subset(meta_scaled, Location==x)})
+#
+# site_subsets # sanity check1 (should see all elements in list)
+# site_subsets[[1]] # sanity check2 (see 1st element in list)
+# #rename the list elements
+#
+# # name each element in list
+# names(site_subsets)<-site_list # * only do this if the order of names in site_list match order of the elements in site_subsets!
+# site_subsets$April.2022 # sanity check3 - should be able to pull dataframes by names rather than index now
+#
+# # example of subsetting
+# site_subsets[[2]][1:3]
+# site_subsets$August.2021[1:3] # should produce same ouptut as line above
+#
+# site_subsets[[2]][1:2,1:2] # another example
+#
+# # ^ subsetting to [[second dataframe]], [[row #, column #]]
+# site_subsets[[2]][[1,2]] # [[second dataframe]], [[row 1, column 2]]
+#
+# # set up the function and run this to store it in our Global environment
+# df_specific.subset<-function(var_vec,var_subsets){
+#   # var_vec = vector of variable elements from specific categorical variable;
+#   ## e.g. vector of names from Site categorical variable (metadata sites)
+#   # var_subsets = list of dataframes subsetted by column$element from original dataframe;
+#   ## e.g. list of dataframes (each df = element of list) subsetted from metadata using vector of metadata$Site names
+#   for(i in seq_along(var_vec)){
+#     # print(var_vec[i]) -- var_vec[i] = each element in var_vec
+#     # print(var_subsets[[i]]) -- var_subsets[[i]] = each sub
+#     df<-paste(var_vec[i])
+#     #print(df)
+#     assign(df, var_subsets[[i]], envir = .GlobalEnv)
+#     print(paste("Dataframe", var_vec[i] ,"done"))
+#
+#   }
+#
+# }
+#
+# # run the function
+# df_specific.subset(site_list, site_subsets) # used scaled metadata quantitative values
+#
+# head(August.2021) # sanity check
+# August.2021[1:5,] # double check that our new Variable (here Location) data frames still have scaled chemical data
+# rownames(August.2021)
+#
+# # matching data with user defined function -- here is the function, must run to store function in Global env
+# match_dat<-function(compdata, subset_metadata){
+#   subset_comp_data = pullrow<-(is.element(row.names(compdata), row.names(subset_metadata)))
+#   ### * comp data and metadata need to have row names - rownames should be Sample IDs
+#   subset_comp_data=compdata[pullrow,]
+#   return(subset_comp_data)
+# }
+#
+# # double check that our data frames are ready for this function, aka that they both have the same rownames
+# ## row #s do not have to be the same, but their row names should be in the same format and be able to match up
+# rownames(f.RA)
+# rownames(August.2021)
+#
+# # run the function
+# f.RA_AUG21<-match_dat(f.RA,August.2021)
+# f.RA_DEC21<-match_dat(f.RA,December.2021)
+# f.RA_APR22<-match_dat(f.RA,April.2022)
+#
+# # did the function work the way we wanted it to?
+#
+# f.RA_AUG21[1:4,1:4]
+# rownames(August.2021) %in% rownames(f.RA_AUG21) # hopefully all of the rownames match, aka will get output of TRUE
+#
+#### Check Count Data Relationship w/ Env Variables (w/ DCA) ####
+## remember, CCA assumes that our species have a unimodal relationship with our variables.
+### unimodal = one maximum, think upsidedown bellcurve or something
+## RDA assumes a linear relationship
+## check the assumption w/ DCA
+# ^ more on DCA here: https://ordination.okstate.edu/DCA.htm
+
+# ALL data
+# add pseudocount so row sums are > 0
+f.RA.pseudo<-f.RA+1
+f.dca = decorana(f.RA.pseudo)
+
+#plot(f.dca) # may take too long to load, do not run unless you have to
+f.dca #DCA1 axis length = 0.1375875; use RDA
+## The length of first DCA axis:
+## > 4 indicates heterogeneous dataset on which unimodal methods should be used (CCA),
+##  < 3 indicates homogeneous dataset for which linear methods are suitable (RDA)
+## between 3 and 4 both linear and unimodal methods are OK.
+
+# BY MONTH
+#
+# f.RA_A21.pseudo<-f.RA_AUG21+1
+# f.A21.dca = decorana(f.RA_A21.pseudo)
+# f.A21.dca #DCA1 axis length = 0.211195; use RDA
+#
+# f.RA_D21.pseudo<-f.RA_DEC21+1
+# f.D21.dca = decorana(f.RA_D21.pseudo)
+# f.D21.dca #DCA1 axis length = 0.229916; use RDA
+#
+# f.RA_A22.pseudo<-f.RA_APR22+1
+# f.A22.dca = decorana(f.RA_A22.pseudo)
+# f.A22.dca #DCA1 axis length = 0.200988; use RDA
+
+#### RDA w/ All Data ####
+
+rownames(meta_scaled) %in% rownames(f.RA) # check order of DFs
+head(meta_scaled[,7:17])
+
+rda.all.0<-rda(f.RA ~ PbConc+CdConc+AsConc+CrConc+PercClay+PercSilt+PercSand+pH+WEOC+P04Conc+CEC,data=meta_scaled)
+
+# check summary of RDA
+rda.all.0
+summary(rda.all.0)
+
+# how much variation does our model explain?
+## reminder: R^2 = % of variation in dependent variable explained by model
+RsquareAdj(rda.all.0) # 6.53%
+## ^^ use this b/c chance correlations can inflate R^2
+
+# we can then test for significance of the model by permutation
+# if it is not significant, it doesn't matter how much of the variation is explained
+anova(rda.all.0, permutations = how(nperm=999)) # p = 0.001, significant
+
+## we can also do a permutation test by RDA axis
+#anova(rda.all.0, by = "axis", permutations = how(nperm=999)) ### by RDA axis
+## or by terms (aka variables)
+anova(rda.all.0, by = "terms", permutations = how(nperm=999)) ### by variables
+## this will help us interpret our RDA and we can see some variable are not significant
+#                           Df Variance      F Pr(>F)
+#         Df Variance      F Pr(>F)
+# PbConc    1 0.007568 1.4518  0.088 .
+# CdConc    1 0.010501 2.0146  0.013 *
+# AsConc    1 0.006048 1.1604  0.266
+# CrConc    1 0.007020 1.3468  0.176
+# PercClay  1 0.008101 1.5542  0.033 *
+# PercSilt  1 0.005609 1.0760  0.331
+# PercSand  1 0.007849 1.5058  0.045 *
+# pH        1 0.005407 1.0373  0.422
+# WEOC      1 0.008535 1.6374  0.075 .
+# P04Conc   1 0.007720 1.4810  0.061 .
+# CEC       1 0.007768 1.4903  0.076 .
+# Residual 57 0.297113
+
+# Calculating variance inflation factor (VIF) for each predictor variable to check multicolinearity of predictor variables
+## VIF helps determien which predictors are too strongly correlated with other predictor variables to explain variation observed
+vif.cca(rda.all.0)
+# PbConc   CdConc   AsConc   CrConc PercClay PercSilt PercSand       pH     WEOC  P04Conc      CEC
+#2.740855 3.117165 1.616960 4.356329 5.540348 5.289332 1.672670 1.405058 1.511652 1.609008 1.571110
+
+## Understanding VIF results...
+# A value of 1 indicates there is no correlation between a given predictor variable and any other predictor variables in the model.
+# A value between 1 and 5 indicates moderate correlation between a given predictor variable and other predictor variables in the model, but this is often not severe enough to require attention.
+# A value greater than 5 indicates potentially severe correlation between a given predictor variable and other predictor variables in the model. In this case, the coefficient estimates and p-values in the regression output are likely unreliable.
+# when to ignore high VIF values: https://statisticalhorizons.com/multicollinearity/
+
+head(meta_scaled)
+## we can use model selection instead of picking variables we think are important (by p values)
+# more info on ordistep & ordiR2step here: https://www.davidzeleny.net/anadat-r/doku.php/en:forward_sel_examples
+rda.all.a = ordistep(rda(f.RA ~ 1, data = meta_scaled[,c(7:17)]),
+                     scope=formula(rda.all.0),
+                     direction = "forward",
+                     permutations = how(nperm=999))
+# f.RA ~ PercSilt + WEOC + PercSand + CEC --> best model
+rda.all.a$anova # see significance of individual terms in model
+#                               Df    AIC      F Pr(>F)
+# + PercSilt  1 -65.834 1.8962  0.002 **
+#   + WEOC      1 -66.285 2.3864  0.004 **
+#   + PercSand  1 -66.072 1.7052  0.010 **
+#   + CEC       1 -65.823 1.6451  0.021 *
+
+# can also use model seletion to pick most important variables by which increases variation (R^2) the most
+rda.all.a2 = ordiR2step(rda(f.RA ~ 1, data = meta_scaled[,c(7:17)]),
+                        scope=formula(rda.all.0),
+                        permutations = how(nperm=999))
+# f.RA ~ WEOC + PercSilt = best model
+rda.all.a2$anova # see significance of individual terms in model
+#                               R2.adj Df    AIC      F Pr(>F)
+# + WEOC          0.019760  1 -66.308 2.3708  0.007 **
+#+ PercSilt      0.033017  1 -66.285 1.9185  0.004 **
+#  <All variables> 0.065363
+
+# check best fit model based on above results
+anova(rda.all.a, permutations = how(nperm=999)) # p =  0.001, significant
+
+# Let's double check by removing the variables with high VIF
+rda.all1<-rda(f.RA ~ PbConc+CdConc+PercClay+PercSilt+PercSand+WEOC+P04Conc+CEC,data=meta_scaled)
+summary(rda.all1)
+RsquareAdj(rda.all1) # how much variation is explained by our model? 6.4%
+anova(rda.all1, by = "terms", permutations = how(nperm=999)) ### by variables
+# PbConc    1 0.007568 1.4497  0.097 .
+# CdConc    1 0.010501 2.0117  0.017 *
+#   PercClay  1 0.008640 1.6552  0.025 *
+#   PercSilt  1 0.006225 1.1924  0.193
+# PercSand  1 0.008813 1.6884  0.009 **
+#   WEOC      1 0.009738 1.8654  0.024 *
+#   P04Conc   1 0.007505 1.4376  0.098 .
+# CEC       1 0.007044 1.3493  0.117
+# Residual 60 0.313206
+
+## this will help us interpret our RDA and we can see some variable are not significant
+vif.cca(rda.all1)
+# PbConc   CdConc PercClay PercSilt PercSand     WEOC  P04Conc      CEC
+# 1.945507 1.784720 5.000206 4.726939 1.398114 1.303918 1.535184 1.482501
+head(meta_scaled)
+## we can use model selection instead of picking variables we think are important -- based on p values
+rda.all.b1 = ordistep(rda(f.RA ~ 1, data = meta_scaled[,c(7:8,11:13,15:17)]),
+                      scope=formula(rda.all1),
+                      direction = "forward",
+                      permutations = how(nperm=999))
+# f.RA ~ PercSilt + WEOC + PercSand + CEC  = best model
+rda.all.b1$anova # see significance of individual terms in model
+#                               Df    AIC      F Pr(>F)
+#+ PercSilt  1 -65.834 1.8962  0.001 ***
+#+ WEOC      1 -66.285 2.3864  0.005 **
+#  + PercSand  1 -66.072 1.7052  0.010 **
+#  + CEC       1 -65.823 1.6451  0.030 *
+
+# Can also use model selection to pick variables by which ones increase variation (R^2)
+rda.all.b2 = ordiR2step(rda(f.RA ~ 1, data = meta_scaled[,c(7:8,11:13,15:17)]),
+                        scope=formula(rda.all1),
+                        permutations = how(nperm=999))
+# f.RA ~ Dissolved_OrganicMatter_RFU + Sulfate_milliM + Temp_DegC + Depth.num + DO_%Local = best model
+rda.all.b2$anova # see significance of individual terms in model
+#                               R2.adj Df    AIC      F Pr(>F)
+# + WEOC          0.019760  1 -66.308 2.3708  0.004 **
+# + PercSilt      0.033017  1 -66.285 1.9185  0.003 **
+
+# check best fit model based on above results
+anova(rda.all.b1, permutations = how(nperm=999)) # p =  0.001, significant
+
+# compare model fits to each other
+anova(rda.all.0, rda.all.b1)
+
+rda.all2<-rda(f.RA ~ PercSilt + WEOC + PercSand + CEC,data=meta_scaled)
+summary(rda.all2)
+RsquareAdj(rda.all2) # how much variation is explained by our model? 5.26%
+anova(rda.all2, by = "terms", permutations = how(nperm=999)) ### by variables
+# PercSilt  1  0.01044 1.9755  0.001 ***
+# WEOC      1  0.01287 2.4359  0.005 **
+#  PercSand  1  0.00910 1.7221  0.008 **
+#  CEC       1  0.00869 1.6451  0.030 *
+#  Residual 64  0.33814
+
+## this will help us interpret our RDA and we can see some variable are not significant
+vif.cca(rda.all2)
+# PercSilt     WEOC PercSand      CEC
+# 1.022849 1.114554 1.077606 1.118624
+head(meta_scaled)
+## we can use model selection instead of picking variables we think are important -- based on p values
+rda.all.c1 = ordistep(rda(f.RA ~ 1, data = meta_scaled[,c(12:13,15,17)]),
+                      scope=formula(rda.all2),
+                      direction = "forward",
+                      permutations = how(nperm=999))
+# f.RA ~ WEOC + PercSilt + PercSand + CEC   = best model
+rda.all.c1$anova # see significance of individual terms in model
+# #                               Df    AIC      F Pr(>F)
+#            Df     AIC      F Pr(>F)
+# + WEOC      1 -66.308 2.3708  0.003 **
+#  + PercSilt  1 -66.285 1.9185  0.001 ***
+#  + PercSand  1 -66.072 1.7052  0.016 *
+#  + CEC       1 -65.823 1.6451  0.017 *
+
+# Can also use model selection to pick variables by which ones increase variation (R^2)
+rda.all.c2 = ordiR2step(rda(f.RA ~ 1, data = meta_scaled[,c(12:13,15,17)]),
+                        scope=formula(rda.all2),
+                        permutations = how(nperm=999))
+# f.RA ~ WEOC + PercSilt + PercSand + CEC  = best model
+rda.all.c2$anova # see significance of individual terms in model
+#                               R2.adj Df    AIC      F Pr(>F)
+# + WEOC          0.019760  1 -66.308 2.3708  0.004 **
+# + PercSilt      0.033017  1 -66.285 1.9185  0.002 **
+#   + PercSand      0.043239  1 -66.072 1.7052  0.016 *
+#   + CEC           0.052642  1 -65.823 1.6451  0.033 *
+#   <All variables> 0.052642
+
+#### Final RDAs ####
+# RDA by sampling timepoint
+head(meta_scaled)
+head(f.RA)
+rownames(f.RA) %in% rownames(meta_scaled) # sanity check 1
+
+# all data
+#rda.all2$call # best model for all data
+
+rda.all<-rda(f.RA ~ WEOC + PercSilt + PercSand + CEC,data=meta_scaled)
+rda.all
+summary(rda.all)
+RsquareAdj(rda.all) # how much variation is explained by our model? 5.26% variation
+anova(rda.all, permutations = how(nperm=999)) # p-value = 0.001
+anova(rda.all, by = "terms", permutations = how(nperm=999))
+#                               Df Variance      F Pr(>F)
+#WEOC      1  0.01296 2.4531  0.002 **
+# PercSilt  1  0.01035 1.9583  0.002 **
+#   PercSand  1  0.00910 1.7221  0.013 *
+#   CEC       1  0.00869 1.6451  0.022 *
+#   Residual 64  0.33814
+aov.rda.all<-anova(rda.all, by = "terms", permutations = how(nperm=999)) # by individual terms
+p.adjust(aov.rda.all$`Pr(>F)`,method="bonferroni",n=length(aov.rda.all$`Pr(>F)`)) # adjusted pvalues
+
+aov.rda.all2<-anova(rda.all, by = NULL, permutations = how(nperm=999)) # by whole model
+p.adjust(aov.rda.all2$`Pr(>F)`,method="bonferroni",n=length(aov.rda.all2$`Pr(>F)`)) # adjusted pvalues
+
+
+#### Plot RDA - ALL data ####
+#plot(rda.aug2021) # depending on how many species you have, this step may take a while
+plot(rda.all, scaling = 1)
+## scaling = 1 -> emphasizes relationships among sites
+plot(rda.all, scaling = 2)
+## scaling = 2 -> emphasizes relationships among species
+
+# check summary of RDA
+summary(rda.all)
+
+# how much variation does our model explain?
+## reminder: R^2 = % of variation in dependent variable explained by model
+RsquareAdj(rda.all) # 5.26%
+## ^^ use this b/c chance correlations can inflate R^2
+
+# we can then test for significance of the model by permutation
+# if it is not significant, it doesn't matter how much of the variation is explained
+##anova(rda.all, permutations = how(nperm=999)) # p = 0.001, significant
+
+png('figures/EnvDrivers/AllData_autoplot_rda_example.png',width = 700, height = 600, res=100)
+autoplot(rda.all, arrows = TRUE,data = rda.all ,layers=c("biplot","sites"),label = FALSE, label.size = 3, shape = FALSE, loadings = TRUE, loadings.colour = 'blue', loadings.label = TRUE, loadings.label.size = 3, scale= 0)+theme_classic()
+dev.off()
+## FOR AUTOPLOT -> must load packagve ggvegan first
+
+
+# variance partitioning of RDA
+rda.all.part<-varpart(f.RA, meta_scaled$WEOC, meta_scaled$PercSilt,meta_scaled$CEC)
+rda.all.part$part
+# plot variance partitioning results
+png('figures/EnvDrivers/AllData_RDA_VariancePartitioning.png',width = 900, height = 900, res=100)
+plot(rda.all.part,
+     Xnames = c("WEOC", "PercSilt","CEC"), # name the partitions
+     bg = c("#ef476f", "#ffbe0b","skyblue"), alpha = 80, # colour the circles
+     digits = 3, # only show 2 digits
+     cex = 1.5)
+dev.off()
+
+rda.sum.all<-summary(rda.all)
+rda.sum.all$sites[,1:2]
+rda.sum.all$cont #cumulative proportion of variance per axis
+# RDA1 = 3.68, RDA2 = 2.81
+
+# create data frame w/ RDA axes for sites
+# first check rownames of RDA & metadata, then make df
+rownames(rda.sum.all$sites) %in% rownames(meta_scaled)
+rda.axes.all<-data.frame(RDA1=rda.sum.all$sites[,1], RDA2=rda.sum.all$sites[,2], SampleID=rownames(rda.sum.all$sites), Site=meta_scaled$Site, Location=meta_scaled$Location,Site_Color=meta_scaled$Site_Color,Loc_Color=meta_scaled$Loc_Color)
+
+# create data frame w/ RDA axes for variables
+arrows.all<-data.frame(RDA1=rda.sum.all$biplot[,1], RDA2=rda.sum.all$biplot[,2], Label=rownames(rda.sum.all$biplot))
+arrows.all$Label[(arrows.all$Label) == "PercSilt"] <- "% Silt"
+arrows.all$Label[(arrows.all$Label) == "PercSand"] <- "% Sand"
+
+rda.sum.all$cont #cumulative proportion of variance per axis
+# RDA1=3.68%, RDA2=2.81%
+
+rda.plot1<-ggplot(rda.axes.all, aes(x = RDA1, y = RDA2)) + geom_point(size=2) +
+  geom_segment(data = arrows.all,mapping = aes(x = 0, y = 0, xend = RDA1, yend = RDA2),lineend = "round", # See available arrow types in example above
+               linejoin = "round",
+               size = 0.5,
+               arrow = arrow(length = unit(0.15, "inches")),
+               colour = "black") +
+  geom_label(data = arrows.all,aes(label = Label, x = RDA1, y = RDA2, fontface="bold"))+
+  coord_fixed() + theme_classic() +
+  theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1))
+
+rda.plot2<-ggplot(rda.axes.all, aes(x = RDA1, y = RDA2)) + geom_point(aes(color=Site,shape=Location),size=4) +
+  geom_segment(data = arrows.all,mapping = aes(x = 0, y = 0, xend = RDA1*3, yend = RDA2*3),lineend = "round", # See available arrow types in example above
+               linejoin = "round",
+               size = 0.8,
+               arrow = arrow(length = unit(0.15, "inches")),
+               colour = "black") +
+  geom_label(data = arrows.all,aes(label = Label, x = RDA1*3.5, y = RDA2*3.5, fontface="bold"), size=4)+
+  coord_fixed(ratio = 1, xlim = c(-3,3), ylim = c(-3,3)) + theme_classic() + scale_color_manual(name ="Site", values=unique(rda.axes.all$Site_Color[order(rda.axes.all$Site)])) +
+  scale_shape_discrete(name="Site") +
+  theme(axis.title.x = element_text(size=13),axis.title.y = element_text(size=13),legend.title.align=0.5, legend.title = element_text(size=13),axis.text = element_text(size=11),axis.text.x = element_text(vjust=1),legend.text = element_text(size=11)) +
+  labs(title="RDA: Fungal Composition ",subtitle="Using Bray-Curtis Distances",color="Site",shape="Location") +
+  xlab("RDA1 [3.68%]") + ylab("RDA2 [2.81%]")+guides(shape = guide_legend(override.aes = list(size = 4)))
+
+ggsave(rda.plot2,filename = "figures/EnvDrivers/ITS2_RDA_AllData.png", width=10, height=10, dpi=600)
+
+
+#### Save Progress ####
+
+save.image("Fungal_Amplicon_EnvDriver.Rdata")
